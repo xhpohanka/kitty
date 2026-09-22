@@ -549,10 +549,32 @@ find_monitor_by_name(const char *name) {
 }
 
 
+static _GLFWmonitor *
+monitor_under_pointer(void) {
+    Window root, child;
+    int root_x, root_y, child_x, child_y;
+    unsigned int mask;
+
+    if (!XQueryPointer(
+            _glfw.x11.display, _glfw.x11.root,
+            &root, &child, &root_x, &root_y, &child_x, &child_y, &mask))
+        return NULL;
+
+    for (int i = 0; i < _glfw.monitorCount; i++) {
+        _GLFWmonitor *monitor = _glfw.monitors[i];
+        MonitorGeometry mg = _glfwPlatformGetMonitorGeometry(monitor);
+        if (root_x >= mg.full.x && root_x < mg.full.x + mg.full.width &&
+            root_y >= mg.full.y && root_y < mg.full.y + mg.full.height)
+            return monitor;
+    }
+    return NULL;
+}
+
+
 static WindowGeometry
-calculate_layer_geometry(_GLFWwindow *window) {
-    _GLFWmonitor *monitor = find_monitor_by_name(config.output_name);
-    MonitorGeometry mg = _glfwPlatformGetMonitorGeometry((_GLFWmonitor *)glfwGetPrimaryMonitor());
+calculate_layer_geometry(_GLFWwindow *window, _GLFWmonitor *monitor) {
+    if (!monitor) monitor = find_monitor_by_name(config.output_name);
+    MonitorGeometry mg = _glfwPlatformGetMonitorGeometry(monitor);
     WindowGeometry ans = {0};
     debug_rendering(
         "Monitor: %s full: %dx%d@%dx%d workarea: %dx%d@%dx%d\n",
@@ -771,7 +793,7 @@ static bool
 createNativeWindow(_GLFWwindow *window, const _GLFWwndconfig *wndconfig, Visual *visual, int depth) {
     WindowGeometry wg = {.width = wndconfig->width, .height = wndconfig->height};
     if (window->x11.layer_shell.is_active) {
-        wg = calculate_layer_geometry(window);
+        wg = calculate_layer_geometry(window, NULL);
         window->resizable = false;
     }
 
@@ -2396,7 +2418,7 @@ _glfwPlatformGetLayerShellConfig(_GLFWwindow *window) {
 bool
 _glfwPlatformSetLayerShellConfig(_GLFWwindow *window, const GLFWLayerShellConfig *value) {
     if (value) window->x11.layer_shell.config = *value;
-    WindowGeometry wg = calculate_layer_geometry(window);
+    WindowGeometry wg = calculate_layer_geometry(window, NULL);
     update_wm_hints(window, &wg, NULL);
     return false;
 }
@@ -2657,11 +2679,12 @@ _glfwPlatformMaximizeWindow(_GLFWwindow *window) {
 }
 
 void
-_glfwPlatformShowWindow(_GLFWwindow *window, bool move_to_active_screen UNUSED) {
+_glfwPlatformShowWindow(_GLFWwindow *window, bool move_to_active_screen) {
     if (_glfwPlatformWindowVisible(window)) return;
 
     if (window->x11.layer_shell.is_active) {
-        WindowGeometry wg = calculate_layer_geometry(window);
+        _GLFWmonitor *monitor = move_to_active_screen ? monitor_under_pointer() : NULL;
+        WindowGeometry wg = calculate_layer_geometry(window, monitor);
         // Re-apply WM hints before mapping because some window managers (e.g.
         // kwin_x11) clear _NET_WM_STATE when a window is unmapped/withdrawn,
         // causing _NET_WM_STATE_ABOVE, _NET_WM_STATE_SKIP_TASKBAR and other
